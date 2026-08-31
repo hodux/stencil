@@ -1,0 +1,9 @@
+.env
+.envrc
+export*
+stencil
+downloads/
+docs/
+docker/
+content/
+tmp
