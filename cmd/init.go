@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -26,6 +27,7 @@ func init() {
 
 func bootstrapSite(siteDir string) {
 	fmt.Printf("[INFO] Initializing new Hugo site in %s\n", siteDir)
+	now := time.Now()
 
 	hugoInit := exec.Command("hugo", "new", "site", siteDir)
 	hugoInit.Stderr = os.Stderr
@@ -105,6 +107,7 @@ You can also edit this file in ` + "`" + `/content/docs/_index.md` + "`" + `
 		log.Fatalf("Failed to write docs _index.md: %v", err)
 	}
 
-	fmt.Println("[OK]   Hugo site with Hextra theme is ready")
-	fmt.Printf("[INFO] :\n 1. stencil clean ./my-export.zip %s/content/docs\n 2. cd %s\n 3. hugo server\n", siteDir, siteDir)
+	duration := time.Since(now).Round(time.Microsecond)
+	fmt.Printf("[OK]   Hugo site with Hextra theme is ready (%v)\n", duration)
+	fmt.Printf("[INFO] Proceed by running these commands:\n 1. stencil clean ./my-export.zip %s/content/docs\n 2. cd %s\n 3. hugo server\n", siteDir, siteDir)
 }

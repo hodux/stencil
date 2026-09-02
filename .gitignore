@@ -7,3 +7,5 @@ docs/
 docker/
 content/
 tmp
+converted/
+my-hugo-site/
