@@ -48,7 +48,7 @@ type ExportCheck struct {
 }
 
 type Collection struct {
-	ID          string `json:"id"`
+	ID   string `json:"id"`
 	Name string `json:"name"`
 	Desc string `json:"desc"`
 }
@@ -58,6 +58,7 @@ var (
 	includeAttachments bool
 	forceExport        bool
 	exportCooldown     int
+	onlyCollection     bool
 	overrideURL        string
 	overrideToken      string
 )
@@ -67,7 +68,6 @@ var pullCmd = &cobra.Command{
 	Short: "Export all collections from Outline, will reuse an export from the last configured time. Default: 30mins",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-
 		// variables
 		destFolder := args[0]
 		token := overrideToken
@@ -86,6 +86,11 @@ var pullCmd = &cobra.Command{
 
 		client := &http.Client{}
 		operationID := ""
+
+		if onlyCollection {
+			fetchCollectionsMetadata(client, baseURL, token, destFolder)
+			return
+		}
 
 		// check for existing exports within exportCooldown
 		if !forceExport {
@@ -114,6 +119,7 @@ func init() {
 	pullCmd.Flags().BoolVar(&includePrivate, "private", false, "Include private collections")
 	pullCmd.Flags().BoolVar(&forceExport, "force", false, "Force an export")
 	pullCmd.Flags().IntVar(&exportCooldown, "cooldown", 10, "Reuse an export if within this time (in mins)")
+	pullCmd.Flags().BoolVar(&onlyCollection, "only-collections", false, "Only pull collections metadata")
 	pullCmd.Flags().StringVar(&overrideURL, "url", "", "Outline URL overrides env")
 	pullCmd.Flags().StringVar(&overrideToken, "token", "", "Outline Token, overrides env")
 }
@@ -292,7 +298,7 @@ func downloadArchive(client *http.Client, baseURL, token, operationID, destFolde
 		log.Fatalf("Failed to download file, status code: %d\n", resp.StatusCode)
 	}
 
-	err = os.MkdirAll(destFolder, 0755)
+	err = os.MkdirAll(destFolder, 0o755)
 	if err != nil {
 		log.Fatalf("Error creating the directory: %v\n", err)
 	}
@@ -379,7 +385,7 @@ func fetchCollectionsMetadata(client *http.Client, baseURL, token, destFolder st
 		log.Fatalf("Error during marshal: %v\n", err)
 	}
 	path := filepath.Join(destFolder, "collections.json")
-	err = os.WriteFile(path, jsonData, 0644)
+	err = os.WriteFile(path, jsonData, 0o644)
 	if err != nil {
 		log.Fatalf("Error during collections write: %v\n", err)
 	}
