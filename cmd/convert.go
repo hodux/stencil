@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -48,19 +49,26 @@ func init() {
 }
 
 func processZip(zipPath, destFolder string) {
-	// collections are folders, which need _index.md for the overview description
-	// sub_collections are folders within collections, they also need _index.md for nesting
-	// pages are .md files in collections and sub_collections
-	// assets belong to collections and are stored in uploads/ of ther respective collection
+	// collections are folders, which need _index.md for their overview description
+	// nested collections are folders within collections, they also need _index.md, empty if their sibling .md file doesn't exist
+	// pages are .md files in collections and nested collections
+	// assets belong to collections and are stored in uploads/ of the respective collection's root
 
 	var collections []Collection
+	// TODO: switch to map[string]{}struct?
 	completedCollections := make(map[string]bool)
 	completedPages := make(map[string]bool)
 	// populate collections via collections.json
 	dir, _ := filepath.Split(zipPath)
 	collectionsFile := filepath.Join(dir, "collections.json")
 	data, err := os.ReadFile(collectionsFile)
+	if err != nil {
+		log.Fatalf("Error reading file: %v\n", err)
+	}
 	err = json.Unmarshal(data, &collections)
+	if err != nil {
+		log.Fatalf("Error during json unmarshal: %v\n", err)
+	}
 
 	// read zip
 	r, err := zip.OpenReader(zipPath)
@@ -69,13 +77,13 @@ func processZip(zipPath, destFolder string) {
 	}
 	defer r.Close()
 
-	_ = os.MkdirAll(destFolder, 0755)
+	_ = os.MkdirAll(destFolder, 0o755)
 	for _, f := range r.File {
 		fmt.Printf("[INFO] File: %v\n", f.Name)
-		filePath := filepath.Join(destFolder, f.Name)
+		targetPath := filepath.Join(destFolder, f.Name)
 
 		if f.FileInfo().IsDir() {
-			_ = os.MkdirAll(filePath, 0755)
+			_ = os.MkdirAll(targetPath, 0o755)
 			continue
 		}
 
@@ -89,17 +97,25 @@ func processZip(zipPath, destFolder string) {
 			log.Fatalf("Error reading zip contents: %v\n", err)
 		}
 
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			log.Fatalf("Error creating directory: %v\n", err)
+		}
+		err = os.WriteFile(targetPath, contents, 0o644)
+		if err != nil {
+			log.Fatalf("Error writing file: %v\n", err)
+		}
+
 		// convert while contents is still in-memory
 		collectionName := getTopLevelDir(f.Name)
 		collectionIndexPath := filepath.Join(destFolder, collectionName, indexName)
 		collectionContent := getCollectionDesc(collectionName, collections)
-		rawName := filepath.Base(f.Name)
+		pageName := filepath.Base(f.Name)
 
 		// pages
-		if filepath.Ext(rawName) == ".md" {
-			completedPages[f.Name] = true
+		if filepath.Ext(pageName) == ".md" && !f.FileInfo().IsDir() {
+			completedPages[targetPath] = true
 			if !skipFrontmatter {
-				title := strings.TrimSuffix(rawName, filepath.Ext(rawName))
+				title := strings.TrimSuffix(pageName, filepath.Ext(pageName))
 				contents, err = addFrontmatterTitle(title, contents, skipDeleteHeader)
 				if err != nil {
 					log.Fatalf("Error adding frontmatter: %v\n", err)
@@ -109,7 +125,7 @@ func processZip(zipPath, destFolder string) {
 				contents = fixAssetLinks(contents, collectionName)
 			}
 		}
-		err = os.WriteFile(filePath, contents, 0644)
+		err = os.WriteFile(targetPath, contents, 0o644)
 		if err != nil {
 			log.Fatalf("Error writing zip contents: %v\n", err)
 		}
@@ -127,12 +143,35 @@ func processZip(zipPath, destFolder string) {
 			if !skipAssetFix {
 				collectionContent = fixAssetLinks(collectionContent, collectionName)
 			}
-			err = os.WriteFile(collectionIndexPath, collectionContent, 0644)
+			err = os.WriteFile(collectionIndexPath, collectionContent, 0o644)
 			if err != nil {
 				log.Fatalf("Error writing collection index: %v\n", err)
 			}
 		}
 	}
+
+	// post-process step for nested collections (example.md -> example/_index.md)
+	err = filepath.WalkDir(destFolder, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			fmt.Printf("Error accessing %s: %v\n", path, err)
+			return err
+		}
+		if d.IsDir() {
+			targetFile := filepath.Clean(path) + ".md"
+			if completedPages[targetFile] {
+				newPath := filepath.Join(path, "_index.md")
+				if err := os.Rename(targetFile, newPath); err != nil {
+					log.Fatalf("Error renaming file: %v\n", err)
+				}
+
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("Error WalkDir failed: %v\n", err)
+	}
+
 	fmt.Printf("[OK]   Completed conversion of %d pages and %d collection descriptions\n", len(completedPages), len(completedCollections))
 }
 
@@ -174,7 +213,7 @@ func addFrontmatterTitle(title string, contents []byte, skipDeleteHeader bool) (
 	out.WriteString(fmTitle)
 	out.WriteString("---\n")
 
-	var duplicateSuffixRegex = regexp.MustCompile(`\s*\(\d+\)$`)
+	duplicateSuffixRegex := regexp.MustCompile(`\s*\(\d+\)$`)
 	cleanTitle := duplicateSuffixRegex.ReplaceAllString(title, "")
 	for sc.Scan() {
 		line := sc.Text()
@@ -201,7 +240,6 @@ func addFrontmatterTitle(title string, contents []byte, skipDeleteHeader bool) (
 // asset-prefix
 // converts markdown relative links into absolute paths since we can't use page bundles,
 var assetLinkRegex = regexp.MustCompile(`(\()uploads/[^)\s"]+`)
-
 func fixAssetLinks(contents []byte, collectionName string) []byte {
 	return assetLinkRegex.ReplaceAllFunc(contents, func(match []byte) []byte {
 		// match starts with "(" followed by the uploads link
@@ -215,6 +253,5 @@ func fixAssetLinks(contents []byte, collectionName string) []byte {
 // converts Outline dimension syntax into HTML <img> tags
 // keep in mind, collection overview descriptions can also have assets in them, so do check its index.md
 func fixOutlineImages(content string) string {
-
 	return ""
 }
