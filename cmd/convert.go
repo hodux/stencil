@@ -18,12 +18,10 @@ import (
 )
 
 var (
-	skipFrontmatter  bool
-	skipDeleteHeader bool
-	skipImageFix     bool
-	skipAssetFix     bool
-	assetPrefix      string
-	indexName        string
+	skipFrontmatter    bool
+	skipImageFix       bool
+	skipNoticeBlockFix bool
+	indexName          string
 )
 
 var convertCmd = &cobra.Command{
@@ -41,10 +39,8 @@ var convertCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(convertCmd)
 	convertCmd.Flags().BoolVar(&skipFrontmatter, "skip-frontmatter", false, "don't add YAML frontmatter title")
-	convertCmd.Flags().BoolVar(&skipDeleteHeader, "skip-header", false, "don't delete the top H1 header line")
 	convertCmd.Flags().BoolVar(&skipImageFix, "skip-image-fix", false, "don't convert Outline image dimension syntax to HTML <img> tags")
-	convertCmd.Flags().BoolVar(&skipAssetFix, "skip-asset-fix", false, "don't rewrite relative asset upload paths")
-	convertCmd.Flags().StringVar(&assetPrefix, "asset-prefix", "", "custom URL prefix for asset link rewriting (default: auto-detected)")
+	convertCmd.Flags().BoolVar(&skipNoticeBlockFix, "skip-noticeblocks-fix", false, "don't convert Outline notice blocks to callouts")
 	convertCmd.Flags().StringVar(&indexName, "index-name", "_index.md", "section index filename (_index.md for Hugo, index.md for Starlight/Docusaurus)")
 }
 
@@ -52,12 +48,13 @@ func processZip(zipPath, destFolder string) {
 	// collections are folders, which need _index.md for their overview description
 	// nested collections are folders within collections, they also need _index.md, empty if their sibling .md file doesn't exist
 	// pages are .md files in collections and nested collections
-	// assets belong to collections and are stored in uploads/ of the respective collection's root
+	// assets are stored in uploads/ of the respective folder's root
 
 	var collections []Collection
 	// TODO: switch to map[string]{}struct?
 	completedCollections := make(map[string]bool)
 	completedPages := make(map[string]bool)
+
 	// populate collections via collections.json
 	dir, _ := filepath.Split(zipPath)
 	collectionsFile := filepath.Join(dir, "collections.json")
@@ -75,7 +72,7 @@ func processZip(zipPath, destFolder string) {
 	if err != nil {
 		log.Fatalf("Error reading zipfile: %v\n", err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	_ = os.MkdirAll(destFolder, 0o755)
 	for _, f := range r.File {
@@ -114,15 +111,19 @@ func processZip(zipPath, destFolder string) {
 		// pages
 		if filepath.Ext(pageName) == ".md" && !f.FileInfo().IsDir() {
 			completedPages[targetPath] = true
+			contents = parseLineSeparator(contents)
 			if !skipFrontmatter {
 				title := strings.TrimSuffix(pageName, filepath.Ext(pageName))
-				contents, err = addFrontmatterTitle(title, contents, skipDeleteHeader)
+				contents, err = addFrontmatterTitle(title, contents)
 				if err != nil {
 					log.Fatalf("Error adding frontmatter: %v\n", err)
 				}
 			}
-			if !skipAssetFix {
-				contents = fixAssetLinks(contents, collectionName)
+			if !skipNoticeBlockFix {
+				contents = fixNoticeBlocks(contents)
+			}
+			if !skipImageFix {
+				contents = fixOutlineImages(contents)
 			}
 		}
 		err = os.WriteFile(targetPath, contents, 0o644)
@@ -130,18 +131,22 @@ func processZip(zipPath, destFolder string) {
 			log.Fatalf("Error writing zip contents: %v\n", err)
 		}
 
-		// collections and sub-collections
+		// collections and nested collections
 		if !completedCollections[collectionName] {
 			fmt.Printf("[INFO] Collection: %v\n", collectionName)
 			completedCollections[collectionName] = true
+			collectionContent = parseLineSeparator(collectionContent)
 			if !skipFrontmatter {
-				collectionContent, err = addFrontmatterTitle(collectionName, collectionContent, skipDeleteHeader)
+				collectionContent, err = addFrontmatterTitle(collectionName, collectionContent)
 				if err != nil {
 					log.Fatalf("Error adding frontmatter: %v\n", err)
 				}
 			}
-			if !skipAssetFix {
-				collectionContent = fixAssetLinks(collectionContent, collectionName)
+			if !skipNoticeBlockFix {
+				collectionContent = fixNoticeBlocks(collectionContent)
+			}
+			if !skipImageFix {
+				collectionContent = fixOutlineImages(collectionContent)
 			}
 			err = os.WriteFile(collectionIndexPath, collectionContent, 0o644)
 			if err != nil {
@@ -159,11 +164,10 @@ func processZip(zipPath, destFolder string) {
 		if d.IsDir() {
 			targetFile := filepath.Clean(path) + ".md"
 			if completedPages[targetFile] {
-				newPath := filepath.Join(path, "_index.md")
+				newPath := filepath.Join(path, indexName)
 				if err := os.Rename(targetFile, newPath); err != nil {
 					log.Fatalf("Error renaming file: %v\n", err)
 				}
-
 			}
 		}
 		return nil
@@ -187,6 +191,15 @@ func getTopLevelDir(p string) string {
 	return ""
 }
 
+// normalizes escaped newlines and removes outline's break lines
+var isolatedSlashRegex = regexp.MustCompile(`(?m)^[\s\x{00a0}]*\\$`)
+
+func parseLineSeparator(contents []byte) []byte {
+	contents = bytes.ReplaceAll(contents, []byte(`\n`), []byte("\n"))
+	contents = isolatedSlashRegex.ReplaceAll(contents, []byte(""))
+	return contents
+}
+
 // get the overview description of a collection
 func getCollectionDesc(name string, collections []Collection) []byte {
 	for _, item := range collections {
@@ -199,34 +212,34 @@ func getCollectionDesc(name string, collections []Collection) []byte {
 	return nil
 }
 
-// skip-frontmatter
-// skip-header
-func addFrontmatterTitle(title string, contents []byte, skipDeleteHeader bool) ([]byte, error) {
-	sc := bufio.NewScanner(bytes.NewReader(contents))
+// converts the title to frontmatter
+var duplicateSuffixRegex = regexp.MustCompile(`\s*\(\d+\)$`)
+
+func addFrontmatterTitle(title string, contents []byte) ([]byte, error) {
+	cleanTitle := duplicateSuffixRegex.ReplaceAllString(title, "")
+	headerRegex := regexp.MustCompile(fmt.Sprintf(`(?m)^#\s+(.*?\b%s\s*)$`, regexp.QuoteMeta(cleanTitle)))
+	displayTitle := title
+	if match := headerRegex.FindSubmatch(contents); len(match) > 1 {
+		displayTitle = strings.TrimSpace(string(match[1]))
+	}
+
+	quoted, err := json.Marshal(displayTitle)
+	if err != nil {
+		return nil, fmt.Errorf("error quoting frontmatter title: %w", err)
+	}
+
 	var out bytes.Buffer
 	out.WriteString("---\n")
-	quoted, err := json.Marshal(title)
-	if err != nil {
-		log.Fatalf("Error quoting frontmatter title: %v\n", err)
-	}
-	fmTitle := fmt.Sprintf("title: %s\n", quoted)
-	out.WriteString(fmTitle)
+	fmt.Fprintf(&out, "title: %s\n", quoted)
 	out.WriteString("---\n")
 
-	duplicateSuffixRegex := regexp.MustCompile(`\s*\(\d+\)$`)
-	cleanTitle := duplicateSuffixRegex.ReplaceAllString(title, "")
+	sc := bufio.NewScanner(bytes.NewReader(contents))
 	for sc.Scan() {
 		line := sc.Text()
 
-		target := fmt.Sprintf("# %s", cleanTitle)
-		if strings.Contains(line, target) {
-			if skipDeleteHeader {
-				out.WriteString(line + "\n")
-			}
-		} else {
+		if !headerRegex.MatchString(line) {
 			out.WriteString(line + "\n")
 		}
-
 	}
 
 	if err := sc.Err(); err != nil {
@@ -236,22 +249,58 @@ func addFrontmatterTitle(title string, contents []byte, skipDeleteHeader bool) (
 	return out.Bytes(), nil
 }
 
-// skip-asset-fix
-// asset-prefix
-// converts markdown relative links into absolute paths since we can't use page bundles,
-var assetLinkRegex = regexp.MustCompile(`(\()uploads/[^)\s"]+`)
-func fixAssetLinks(contents []byte, collectionName string) []byte {
-	return assetLinkRegex.ReplaceAllFunc(contents, func(match []byte) []byte {
-		// match starts with "(" followed by the uploads link
-		rawPath := string(match[1:])
-		return fmt.Appendf(nil, "(/docs/%s/%s", collectionName, rawPath)
+// converts Outline dimension syntax into HTML <img> tags
+var imageLinkRegex = regexp.MustCompile(`!\[(.*?)\]\((.+?)\s+"(?:.*?\s*=)?\s*(\d+)x(\d+)"\s*\)`)
+
+func fixOutlineImages(contents []byte) []byte {
+	return imageLinkRegex.ReplaceAllFunc(contents, func(match []byte) []byte {
+		sub := imageLinkRegex.FindSubmatch(match)
+		if len(sub) == 0 {
+			return match
+		}
+		alt := string(sub[1])
+		rawURL := string(sub[2])
+		width := string(sub[3])
+		height := string(sub[4])
+
+		imgSrc := rawURL
+		if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+			imgSrc = "/" + strings.TrimPrefix(rawURL, "/")
+		}
+
+		if alt != "" {
+			escapedAlt := strings.ReplaceAll(alt, "'", "&#39;")
+			return fmt.Appendf(nil, "<img src='%s' alt='%s' width='%s' height='%s'>", imgSrc, escapedAlt, width, height)
+		}
+		return fmt.Appendf(nil, "<img src='%s' width='%s' height='%s'>", imgSrc, width, height)
 	})
 }
 
-// skip-image-fix
-// asset-prefix
-// converts Outline dimension syntax into HTML <img> tags
-// keep in mind, collection overview descriptions can also have assets in them, so do check its index.md
-func fixOutlineImages(content string) string {
-	return ""
+// converts notice blocks into github style callouts (:::tip -> > [!TIP])
+var noticeBlockRegex = regexp.MustCompile(`(?s):::(\w+)\r?\n(.*?)\r?\n:::`)
+
+func fixNoticeBlocks(contents []byte) []byte {
+	return noticeBlockRegex.ReplaceAllFunc(contents, func(match []byte) []byte {
+		submatches := noticeBlockRegex.FindSubmatch(match)
+		if len(submatches) < 3 {
+			return match
+		}
+
+		noticeType := strings.ToUpper(string(submatches[1]))
+		body := strings.TrimSpace(string(submatches[2]))
+
+		var out bytes.Buffer
+		fmt.Fprintf(&out, "> [!%s]\n", noticeType)
+		for i, line := range strings.Split(body, "\n") {
+			if i > 0 {
+				_, err := io.WriteString(&out, "\n")
+				if err != nil {
+					log.Fatalf("Error fixing notice blocks: %v\n", err)
+				}
+			}
+			fmt.Fprintf(&out, "> %s", strings.TrimRight(line, "\r"))
+		}
+
+		return out.Bytes()
+	})
 }
