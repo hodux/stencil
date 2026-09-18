@@ -40,7 +40,7 @@ stencil pull --private --attachments --cooldown 15 <path>
 
 You can use stencil to convert/sanitize your Outline exports.
 
-> ![WARNING]
+> [!WARNING]
 > stencil is a WIP and might not cover every edge case, verify your site before deploying it to production. If you find a mismatch between Outline and your converted docs, feel free to open up an issue.
 
 Here is every sanitization step with their respective flag
