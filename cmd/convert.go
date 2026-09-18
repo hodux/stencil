@@ -25,9 +25,8 @@ var (
 )
 
 var convertCmd = &cobra.Command{
-	Use:   "convert [ZIP_SRC] [DEST]",
-	Short: "Unzip your export and sanitize/convert markdown for static documentation sites",
-	Long:  "Extracts Markdown from an Outline zip export, extracts H1 titles for frontmatter, converts parent pages to section index files, and copies asset files.",
+	Use:   "convert [ZIP_SRC] [PATH]",
+	Short: "Transform Outline collections for use on other documentation platforms",
 	Args:  cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		zipPath := args[0]
@@ -38,10 +37,10 @@ var convertCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(convertCmd)
-	convertCmd.Flags().BoolVar(&skipFrontmatter, "skip-frontmatter", false, "don't add YAML frontmatter title")
-	convertCmd.Flags().BoolVar(&skipImageFix, "skip-image-fix", false, "don't convert Outline image dimension syntax to HTML <img> tags")
-	convertCmd.Flags().BoolVar(&skipNoticeBlockFix, "skip-noticeblocks-fix", false, "don't convert Outline notice blocks to callouts")
-	convertCmd.Flags().StringVar(&indexName, "index-name", "_index.md", "section index filename (_index.md for Hugo, index.md for Starlight/Docusaurus)")
+	convertCmd.Flags().BoolVar(&skipFrontmatter, "skip-frontmatter", false, "won't add YAML frontmatter")
+	convertCmd.Flags().BoolVar(&skipImageFix, "skip-image-fix", false, "won't transform Outline image dimension syntax to HTML <img> tags")
+	convertCmd.Flags().BoolVar(&skipNoticeBlockFix, "skip-noticeblocks-fix", false, "won't transform Outline notice blocks to Github callouts")
+	convertCmd.Flags().StringVar(&indexName, "index-name", "_index.md", "specify index filename (e.g. _index.md for Hugo, index.md for Starlight/Docusaurus)")
 }
 
 func processZip(zipPath, destFolder string) {

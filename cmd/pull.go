@@ -56,16 +56,16 @@ type Collection struct {
 var (
 	includePrivate     bool
 	includeAttachments bool
+	overrideURL        string
+	overrideToken      string
 	forceExport        bool
 	exportCooldown     int
 	onlyCollection     bool
-	overrideURL        string
-	overrideToken      string
 )
 
 var pullCmd = &cobra.Command{
 	Use:   "pull [PATH]",
-	Short: "Export all collections from Outline, will reuse an export from the last configured time. Default: 30mins",
+	Short: "Export Outline collections",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		// variables
@@ -115,18 +115,18 @@ var pullCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(pullCmd)
-	pullCmd.Flags().BoolVar(&includeAttachments, "attachments", false, "Include attachments")
-	pullCmd.Flags().BoolVar(&includePrivate, "private", false, "Include private collections")
-	pullCmd.Flags().BoolVar(&forceExport, "force", false, "Force an export")
-	pullCmd.Flags().IntVar(&exportCooldown, "cooldown", 10, "Reuse an export if within this time (in mins)")
-	pullCmd.Flags().BoolVar(&onlyCollection, "only-collections", false, "Only pull collections metadata")
-	pullCmd.Flags().StringVar(&overrideURL, "url", "", "Outline URL overrides env")
+	pullCmd.Flags().BoolVar(&includeAttachments, "attachments", false, "include attachments (i.e. images and files)")
+	pullCmd.Flags().BoolVar(&includePrivate, "private", false, "include private collections")
+	pullCmd.Flags().BoolVar(&forceExport, "force", false, "force an export")
+	pullCmd.Flags().IntVar(&exportCooldown, "cooldown", 10, "reuse an export within this time, if available (in mins)")
+	pullCmd.Flags().BoolVar(&onlyCollection, "only-collections", false, "only pull metadata from collections (i.e. for their description)")
+	pullCmd.Flags().StringVar(&overrideURL, "url", "", "Outline URL, overrides env")
 	pullCmd.Flags().StringVar(&overrideToken, "token", "", "Outline Token, overrides env")
 }
 
 // checks for existing exports within exportCooldown
-func getRecentExportID(client *http.Client, baseUrl, token string) string {
-	apiEndpoint, err := url.JoinPath(baseUrl, "api/fileOperations.list")
+func getRecentExportID(client *http.Client, baseURL, token string) string {
+	apiEndpoint, err := url.JoinPath(baseURL, "api/fileOperations.list")
 	if err != nil {
 		log.Fatalf("Failed to construct URL: %v", err)
 	}
@@ -213,7 +213,7 @@ func triggerExport(client *http.Client, baseURL, token string) string {
 	} else if resp.StatusCode != 200 {
 		log.Fatalf("Error with response: %v\n", resp)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 
@@ -246,7 +246,7 @@ func pollProgress(client *http.Client, baseURL, token, operationID string) {
 		}
 
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		var reply FileOpInfo
 		err = json.Unmarshal(body, &reply)

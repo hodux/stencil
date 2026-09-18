@@ -13,7 +13,7 @@ import (
 
 var initCmd = &cobra.Command{
 	Use:   "init [DEST]",
-	Short: "Bootstraps a clean Hugo site with the Hextra docs theme",
+	Short: "Bootstraps a Hugo site with the Hextra docs theme",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		siteDir := args[0]

@@ -1,4 +1,4 @@
-// cmd/root.go
+// Package cmd/root.go
 package cmd
 
 import (
@@ -10,12 +10,11 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "stencil",
-	Short: "Turn your dynamic collaborative environment (Outline Wiki) into a ready to serve static doccis site (Hextra)",
+	Short: "Export and transform Outline collections",
 }
 
 func Execute() {
-	if err := rootCmd.Execute(); 
-	err != nil {
+	if err := rootCmd.Execute(); err != nil {
 		log.Fatal(err)
 		os.Exit(1)
 	}
